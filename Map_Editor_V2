@@ -1,0 +1,149 @@
+extends Node3D
+
+# Настройки
+var camera_sensitivity = 0.005
+var camera_distance = 10.0
+var camera_distance_min = 5.0
+var camera_distance_max = 30.0
+var camera_rotation = Vector2(0, 0)
+
+# Редактор
+@onready var grid_map = $GridMap
+@onready var camera_pivot = $CameraPivot
+@onready var camera = $CameraPivot/Camera3D
+@onready var mesh_library = preload("res://Blocks.tres") # Ваша MeshLibrary
+
+# UI
+@onready var ui = $UI
+@onready var map_name_edit = $UI/Panel/MapNameEdit
+@onready var status_label = $UI/Panel/StatusLabel
+@onready var block_buttons = $UI/Panel/BlockButtons
+@onready var save_button = $UI/Panel/SaveButton
+@onready var load_button = $UI/Panel/LoadButton
+
+var current_block_id = 0
+var saved_maps_dir = "user://maps/"
+
+func _ready():
+    # Настройка GridMap
+    grid_map.mesh_library = mesh_library
+    grid_map.cell_size = Vector3(1, 1, 1) # Размер ячейки
+    
+    # Создаем папку для карт
+    DirAccess.make_dir_absolute(saved_maps_dir)
+    
+    # Настройка UI
+    setup_block_buttons()
+    update_status("Готов к работе")
+    
+    # Центрируем камеру
+    update_camera_position()
+
+func setup_block_buttons():
+    # Очищаем старые кнопки
+    for child in block_buttons.get_children():
+        child.queue_free()
+    
+    # Создаем кнопки для каждого блока
+    var block_ids = mesh_library.get_item_list()
+    for block_id in block_ids:
+        var btn = Button.new()
+        btn.text = mesh_library.get_item_name(block_id)
+        btn.custom_minimum_size = Vector2(100, 40)
+        btn.pressed.connect(_on_block_selected.bind(block_id))
+        block_buttons.add_child(btn)
+
+func _input(event):
+    # Вращение камеры
+    if event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
+        camera_rotation.x -= event.relative.x * camera_sensitivity
+        camera_rotation.y = clamp(camera_rotation.y - event.relative.y * camera_sensitivity, 
+                                 -PI/2 + 0.1, PI/2 - 0.1)
+        update_camera_position()
+    
+    # Приближение/отдаление
+    if event is InputEventMouseButton:
+        if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+            camera_distance = clamp(camera_distance - 1.0, camera_distance_min, camera_distance_max)
+            update_camera_position()
+        elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+            camera_distance = clamp(camera_distance + 1.0, camera_distance_min, camera_distance_max)
+            update_camera_position()
+    
+    # Размещение/удаление блоков
+    if event is InputEventMouseButton and event.pressed:
+        var mouse_pos = event.position
+        var from = camera.project_ray_origin(mouse_pos)
+        var to = from + camera.project_ray_normal(mouse_pos) * 1000
+        
+        var result = get_world_3d().direct_space_state.intersect_ray(
+            PhysicsRayQueryParameters3D.create(from, to)
+        )
+        
+        if result:
+            var cell_pos = grid_map.world_to_map(result.position)
+            
+            if event.button_index == MOUSE_BUTTON_LEFT:
+                grid_map.set_cell_item(cell_pos, current_block_id)
+                print("Блок поставлен в позицию: ", cell_pos)
+            elif event.button_index == MOUSE_BUTTON_RIGHT:
+                grid_map.set_cell_item(cell_pos, -1)
+
+func update_camera_position():
+    var target_pos = grid_map.global_transform.origin
+    camera_pivot.global_transform.origin = target_pos
+    camera_pivot.rotation = Vector3(camera_rotation.y, camera_rotation.x, 0)
+    camera.position = Vector3(0, 0, camera_distance)
+    camera.look_at(target_pos, Vector3.UP)
+
+func save_map():
+    var map_name = map_name_edit.text.strip_edges()
+    if map_name == "":
+        update_status("Введите название карты!", Color.RED)
+        return
+    
+    var map_data = []
+    for cell in grid_map.get_used_cells():
+        map_data.append({
+            "position": cell,
+            "block": grid_map.get_cell_item(cell)
+        })
+    
+    var file_path = saved_maps_dir.path_join(map_name + ".map")
+    var file = FileAccess.open(file_path, FileAccess.WRITE)
+    file.store_var(map_data)
+    file.close()
+    
+    update_status("Карта '%s' сохранена!" % map_name, Color.GREEN)
+
+func load_map(map_name: String):
+    grid_map.clear()
+    var file_path = saved_maps_dir.path_join(map_name + ".map")
+    
+    if FileAccess.file_exists(file_path):
+        var file = FileAccess.open(file_path, FileAccess.READ)
+        var map_data = file.get_var()
+        
+        for cell in map_data:
+            grid_map.set_cell_item(cell.position, cell.block)
+        
+        update_status("Карта '%s' загружена!" % map_name, Color.GREEN)
+    else:
+        update_status("Файл карты не найден!", Color.RED)
+
+func update_status(message: String, color: Color = Color.WHITE):
+    status_label.text = message
+    status_label.modulate = color
+
+# Сигналы UI
+func _on_block_selected(block_id: int):
+    current_block_id = block_id
+    update_status("Выбран блок: " + mesh_library.get_item_name(block_id))
+
+func _on_save_button_pressed():
+    save_map()
+
+func _on_load_button_pressed():
+    var map_name = map_name_edit.text.strip_edges()
+    if map_name != "":
+        load_map(map_name)
