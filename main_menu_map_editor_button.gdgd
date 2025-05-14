@@ -1,0 +1,7 @@
+# В основной скрипт (main_menu.gd)
+func _ready():
+    # ...
+    $MainMenu/EditorButton.pressed.connect(_on_editor_button_pressed)
+
+func _on_editor_button_pressed():
+    get_tree().change_scene_to_file("res://MapEditor.tscn")
