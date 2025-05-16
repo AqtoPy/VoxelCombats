@@ -3,11 +3,11 @@ func shoot() -> void:
     if !check_valid_weapon_slot():
         return
     
-    # 2. Проверка состояния анимаций и занятости рук
-    if hands_instance.is_busy || animation_player.is_playing():
+    # 2. Проверка состояния анимаций
+    if hands_instance.is_busy:
         return
     
-    # 3. Проверка патронов в магазине
+    # 3. Проверка патронов
     if current_weapon_slot.current_ammo <= 0:
         if current_weapon_slot.reserve_ammo > 0:
             reload()
@@ -17,53 +17,45 @@ func shoot() -> void:
                 animation_player.play(current_weapon_slot.weapon.out_of_ammo_animation)
         return
     
-    # 4. Прерывание перезарядки, если она была
-    if animation_player.current_animation == current_weapon_slot.weapon.reload_animation:
-        animation_player.stop()
+    # 4. Получаем экземпляр оружия и его AnimationPlayer
+    var weapon_instance = weapon_instances[current_weapon_slot]
+    var weapon_anim_player: AnimationPlayer = weapon_instance.get_node("AnimationPlayer") if weapon_instance.has_node("AnimationPlayer") else null
     
-    # 5. Воспроизведение анимации выстрела
-    var shoot_anim = current_weapon_slot.weapon.shoot_animation
-    if animation_player.has_animation(shoot_anim):
-        animation_player.play(shoot_anim)
+    # 5. Проверяем возможность воспроизведения анимации
+    if weapon_anim_player and weapon_anim_player.is_playing():
+        return
     
-    # 6. Анимация рук
-    if current_weapon_slot.weapon.arms_animations.has("shoot"):
-        var hands_anim = current_weapon_slot.weapon.arms_animations["shoot"]
-        hands_instance.play_animation(hands_anim, current_weapon_slot.weapon.hands_animation_speed)
+    # 6. Воспроизведение анимации выстрела на оружии
+    if weapon_anim_player and weapon_anim_player.has_animation("fire"):
+        weapon_anim_player.play("fire")
+    else:
+        push_error("Missing fire animation in weapon: ", current_weapon_slot.weapon.weapon_name)
     
-    # 7. Обновление боеприпасов
+    # 7. Анимация рук
+    if hands_instance.has_method("play_animation"):
+        hands_instance.play_animation(
+            current_weapon_slot.weapon.hands_fire_animation,
+            current_weapon_slot.weapon.hands_animation_speed
+        )
+    
+    # 8. Логика выстрела
     current_weapon_slot.current_ammo -= 1
     update_ammo.emit([current_weapon_slot.current_ammo, current_weapon_slot.reserve_ammo])
     
-    # 8. Создание снаряда/выстрела
-    var spread = calculate_spread()
-    load_projectile(spread)
-    
-    # 9. Обработка автоматического огня
-    if current_weapon_slot.weapon.is_automatic:
-        # Запланировать следующий выстрел согласно скорострельности
-        var fire_delay = 1.0 / current_weapon_slot.weapon.fire_rate
-        await get_tree().create_timer(fire_delay).timeout
-        if Input.is_action_pressed("Shoot"):
-            shoot()
-
-func calculate_spread() -> Vector2:
+    # 9. Создание снаряда
     var spread = Vector2.ZERO
     if current_weapon_slot.weapon.weapon_spray:
         _count += 1
-        var weapon_name = current_weapon_slot.weapon.weapon_name
-        if spray_profiles.has(weapon_name):
-            var spray_profile = spray_profiles[weapon_name]
+        if spray_profiles.has(current_weapon_slot.weapon.weapon_name):
+            var spray_profile = spray_profiles[current_weapon_slot.weapon.weapon_name]
             if spray_profile.has_method("get_spray"):
-                spread = spray_profile.get_spray(
-                    _count, 
-                    current_weapon_slot.weapon.magazine_size
-                )
+                spread = spray_profile.get_spray(_count, current_weapon_slot.weapon.magazine_size)
     
-    # Сброс счетчика разброса через tween
-    if shot_tween:
-        shot_tween.kill()
-    shot_tween = create_tween()
-    shot_tween.tween_property(self, "_count", 0.0, 0.5)
+    load_projectile(spread)
     
-    return spread
+    # 10. Обработка автоматического огня
+    if current_weapon_slot.weapon.is_automatic and Input.is_action_pressed("shoot"):
+        var fire_delay = 1.0 / current_weapon_slot.weapon.fire_rate
+        await get_tree().create_timer(fire_delay).timeout
+        if current_weapon_slot.current_ammo > 0:
+            shoot()
